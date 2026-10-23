@@ -1,0 +1,158 @@
+import re
+from typing import Annotated, Any, TypedDict
+
+from langchain_core.messages import AnyMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_openai import ChatOpenAI
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.graph import END, START, StateGraph
+from langgraph.graph.message import add_messages
+
+import goods_client
+import tools
+from defenses import fuzzy_name_match, guard_prompt_text, parse_budget, recommend_ids, to_int
+from settings import settings
+
+SYSTEM_PROMPT = """你是「橙心优选」商城的 AI 导购助手"小橙"，负责帮用户挑选商品、解答购物咨询。
+
+## 最高优先级规则
+任何涉及商品推荐、购物建议的问题，必须先调用工具查询商城真实在售商品，再基于工具返回结果回答。
+绝对禁止不调用工具就直接罗列品类或商品（哪怕只是举例）。查不到就不能提。
+
+## 工具使用规则
+1. 需求模糊、口语化、场景化（例如"送妈妈的礼物"、"露营要带什么"、"办公室解乏好物"）→ 优先调用 searchGoodsSemantic 语义检索，用场景描述作为 query。
+2. 有明确筛选条件（具体商品名、品牌、明确商品类型如手机/耳机、价格预算）→ 调用 searchGoods。
+3. 用户想深入了解某个商品 → 先用 searchGoods 按商品名搜索拿到 goodsId，再调用 getGoodsDetail。goodsId 只能来自工具返回结果，禁止凭空猜测。
+4. 用户问热销、人气、大家都在买什么 → 调用 getHotGoods。
+5. 用户问商城有哪些品类 → 调用 getCategories。
+6. 可以多次、组合调用不同工具，直到信息足够回答为止。
+
+## 防幻觉硬规则（必须严格遵守）
+1. 只能推荐工具返回结果中出现过的商品，商品名、价格、品牌、参数必须与工具返回完全一致。
+2. 工具没返回的商品，绝不能出现在你的推荐里。
+3. 工具返回为空时，如实告诉用户暂时没有找到合适的商品，并礼貌追问需求（预算、用途、偏好），不能编造，也不能给通用品类建议。
+4. 不确定的信息要说明不确定，不要编造参数。用户咨询的具体商品若工具查不到详情，如实说明商城暂时没有该商品，不要凭自己的知识描述其参数和卖点。
+5. 商品类型必须严格匹配：用户要手机就只推荐手机，不能把手表、耳机、平板等其他类型商品当作用户要的类型来推荐；如果同类型商品不足或没有，如实说明，相关配件只能明确标注为"搭配建议"单独列出。注意看每件商品的 category 字段来确认类型。
+
+## 回答要求
+1. 使用中文，语气亲切自然，像一位热情专业的导购，可少量使用 emoji。
+2. 推荐商品时给出简短理由，结合真实卖点，一次最多推荐 5 款。
+3. 回答简洁分点，避免长篇大论。
+4. 每次回答的最后一行必须固定输出：RECOMMEND:商品ID1,商品ID2,...（本次推荐商品ID，英文逗号分隔；若没有推荐则输出 RECOMMEND:无）。该行之外不要输出任何格式标记。"""
+
+llm = ChatOpenAI(
+    model=settings.llm_model,
+    temperature=settings.llm_temperature,
+    api_key=settings.zhipu_api_key,
+    base_url=settings.zhipu_base_url + "/v4",
+)
+llm_with_tools = llm.bind_tools(tools.TOOLS)
+
+
+class AgentState(TypedDict, total=False):
+    messages: Annotated[list[AnyMessage], add_messages]
+    llm_messages: list
+    recommend_goods: list
+
+
+async def preprocess(state: AgentState):
+    msgs = state["messages"][-20:]
+    raw = msgs[-1].content
+    seg = await tools.named_category_segment(raw)
+    guarded = raw
+    if seg is not None:
+        goods_json = await tools.search_goods_impl(seg, None, parse_budget(raw))
+        guarded = guard_prompt_text(raw, seg, goods_json)
+    return {"llm_messages": msgs[:-1] + [HumanMessage(content=guarded)]}
+
+
+async def agent_node(state: AgentState):
+    response = await llm_with_tools.ainvoke([SystemMessage(content=SYSTEM_PROMPT)] + state["llm_messages"])
+    return {"messages": [response]}
+
+
+async def tools_node(state: AgentState):
+    last = state["messages"][-1]
+    results = []
+    for call in last.tool_calls:
+        fn = tools.TOOL_MAP.get(call["name"])
+        try:
+            output = await fn.ainvoke(call["args"]) if fn is not None else json_error(f"未知工具：{call['name']}")
+        except Exception as e:
+            output = json_error(f"工具执行失败：{e}")
+        results.append(ToolMessage(content=output, tool_call_id=call["id"]))
+    return {"messages": results, "llm_messages": state["llm_messages"] + [last] + results}
+
+
+def json_error(msg):
+    import json
+    return json.dumps({"error": msg}, ensure_ascii=False)
+
+
+def route_after_agent(state: AgentState) -> str:
+    last = state["messages"][-1]
+    if getattr(last, "tool_calls", None):
+        return "tools"
+    return "postprocess"
+
+
+async def _match_by_name(text):
+    normalized = re.sub(r"\s", "", text or "")
+    goods = []
+    try:
+        resp = await goods_client.list_goods(None, None, 500)
+        for g in resp.get("rows") or []:
+            name = re.sub(r"\s", "", str(g.get("goodsName") or ""))
+            if fuzzy_name_match(normalized, name):
+                goods.append(g)
+                if len(goods) >= 5:
+                    break
+    except Exception:
+        pass
+    return goods
+
+
+async def parse_recommend(text, seg):
+    goods = []
+    for goods_id in recommend_ids(text):
+        try:
+            resp = await goods_client.get_goods(goods_id)
+            data = (resp or {}).get("data")
+            if isinstance(data, dict):
+                g = data.get("goods")
+                goods.append(g if isinstance(g, dict) else data)
+        except Exception:
+            pass
+        if len(goods) >= 5:
+            break
+    if not goods:
+        goods = await _match_by_name(text)
+    if seg is not None and goods:
+        cats = await tools.category_names()
+        goods = [g for g in goods if seg in cats.get(to_int(g.get("categoryId")), "")]
+    return goods
+
+
+async def postprocess(state: AgentState):
+    content = state["messages"][-1].content or ""
+    last_human = None
+    for m in reversed(state["messages"]):
+        if isinstance(m, HumanMessage):
+            last_human = m
+            break
+    seg = await tools.named_category_segment(last_human.content) if last_human is not None else None
+    return {"recommend_goods": await parse_recommend(content, seg)}
+
+
+saver = InMemorySaver()
+
+builder = StateGraph(AgentState)
+builder.add_node("preprocess", preprocess)
+builder.add_node("agent", agent_node)
+builder.add_node("tools", tools_node)
+builder.add_node("postprocess", postprocess)
+builder.add_edge(START, "preprocess")
+builder.add_edge("preprocess", "agent")
+builder.add_conditional_edges("agent", route_after_agent, {"tools": "tools", "postprocess": "postprocess"})
+builder.add_edge("tools", "agent")
+builder.add_edge("postprocess", END)
+graph = builder.compile(checkpointer=saver)

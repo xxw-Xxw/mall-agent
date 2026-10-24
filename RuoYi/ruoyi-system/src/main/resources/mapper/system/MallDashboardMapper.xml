@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+"http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.system.mapper.MallDashboardMapper">
+
+    <select id="countUsers" resultType="long">
+        select count(*) from mall_member where status = '0'
+    </select>
+
+    <select id="countUsersToday" resultType="long">
+        select count(*) from mall_member where status = '0' and date(create_time) = curdate()
+    </select>
+
+    <select id="sumRevenue" resultType="java.math.BigDecimal">
+        select ifnull(sum(total_amount), 0) from mall_order where status = '3'
+    </select>
+
+    <select id="sumRevenueToday" resultType="java.math.BigDecimal">
+        select ifnull(sum(total_amount), 0) from mall_order where status = '3' and date(create_time) = curdate()
+    </select>
+
+    <select id="countOrders" resultType="long">
+        select count(*) from mall_order
+    </select>
+
+    <select id="countOrdersToday" resultType="long">
+        select count(*) from mall_order where date(create_time) = curdate()
+    </select>
+
+    <select id="countOrdersPending" resultType="long">
+        select count(*) from mall_order where status = '1'
+    </select>
+
+    <select id="countGoods" resultType="long">
+        select count(*) from mall_goods where del_flag = '0'
+    </select>
+
+    <select id="countCategories" resultType="long">
+        select count(*) from mall_category where del_flag = '0'
+    </select>
+
+    <select id="countLowStockGoods" resultType="long">
+        select count(*) from mall_goods where del_flag = '0' and status = '0' and stock &lt; 10
+    </select>
+
+    <select id="selectRevenueTrend" resultType="java.util.HashMap">
+        select date_format(create_time, '%Y-%m-%d') as date, ifnull(sum(total_amount), 0) as amount
+        from mall_order
+        where status = '3' and create_time &gt;= date_sub(curdate(), interval 6 day)
+        group by date_format(create_time, '%Y-%m-%d')
+        order by date_format(create_time, '%Y-%m-%d')
+    </select>
+
+    <select id="selectOrderStatusDist" resultType="java.util.HashMap">
+        select status, count(*) as count from mall_order group by status
+    </select>
+
+    <select id="selectHotGoods" resultType="java.util.HashMap">
+        select goods_id as goodsId, goods_name as goodsName, price, sales, image_url as imageUrl
+        from mall_goods
+        where del_flag = '0'
+        order by sales desc, goods_id asc
+        limit 5
+    </select>
+
+    <select id="selectLowStockGoods" resultType="java.util.HashMap">
+        select goods_id as goodsId, goods_name as goodsName, price, stock, image_url as imageUrl
+        from mall_goods
+        where del_flag = '0' and status = '0' and stock &lt; 10
+        order by stock asc, goods_id asc
+        limit 5
+    </select>
+</mapper>

@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+"http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.system.mapper.MallOrderItemMapper">
+    
+    <resultMap type="MallOrderItem" id="MallOrderItemResult">
+        <result property="itemId"    column="item_id"    />
+        <result property="orderId"    column="order_id"    />
+        <result property="goodsId"    column="goods_id"    />
+        <result property="goodsName"    column="goods_name"    />
+        <result property="price"    column="price"    />
+        <result property="quantity"    column="quantity"    />
+    </resultMap>
+
+    <sql id="selectMallOrderItemVo">
+        select item_id, order_id, goods_id, goods_name, price, quantity from mall_order_item
+    </sql>
+
+    <select id="selectMallOrderItemList" parameterType="MallOrderItem" resultMap="MallOrderItemResult">
+        <include refid="selectMallOrderItemVo"/>
+        <where>  
+            <if test="orderId != null "> and order_id = #{orderId}</if>
+            <if test="goodsId != null "> and goods_id = #{goodsId}</if>
+            <if test="goodsName != null  and goodsName != ''"> and goods_name like concat('%', #{goodsName}, '%')</if>
+            <if test="price != null "> and price = #{price}</if>
+            <if test="quantity != null "> and quantity = #{quantity}</if>
+        </where>
+    </select>
+    
+    <select id="selectMallOrderItemByItemId" parameterType="Long" resultMap="MallOrderItemResult">
+        <include refid="selectMallOrderItemVo"/>
+        where item_id = #{itemId}
+    </select>
+
+    <insert id="insertMallOrderItem" parameterType="MallOrderItem" useGeneratedKeys="true" keyProperty="itemId">
+        insert into mall_order_item
+        <trim prefix="(" suffix=")" suffixOverrides=",">
+            <if test="orderId != null">order_id,</if>
+            <if test="goodsId != null">goods_id,</if>
+            <if test="goodsName != null">goods_name,</if>
+            <if test="price != null">price,</if>
+            <if test="quantity != null">quantity,</if>
+         </trim>
+        <trim prefix="values (" suffix=")" suffixOverrides=",">
+            <if test="orderId != null">#{orderId},</if>
+            <if test="goodsId != null">#{goodsId},</if>
+            <if test="goodsName != null">#{goodsName},</if>
+            <if test="price != null">#{price},</if>
+            <if test="quantity != null">#{quantity},</if>
+         </trim>
+    </insert>
+
+    <update id="updateMallOrderItem" parameterType="MallOrderItem">
+        update mall_order_item
+        <trim prefix="SET" suffixOverrides=",">
+            <if test="orderId != null">order_id = #{orderId},</if>
+            <if test="goodsId != null">goods_id = #{goodsId},</if>
+            <if test="goodsName != null">goods_name = #{goodsName},</if>
+            <if test="price != null">price = #{price},</if>
+            <if test="quantity != null">quantity = #{quantity},</if>
+        </trim>
+        where item_id = #{itemId}
+    </update>
+
+    <delete id="deleteMallOrderItemByItemId" parameterType="Long">
+        delete from mall_order_item where item_id = #{itemId}
+    </delete>
+
+    <delete id="deleteMallOrderItemByItemIds" parameterType="String">
+        delete from mall_order_item where item_id in 
+        <foreach item="itemId" collection="array" open="(" separator="," close=")">
+            #{itemId}
+        </foreach>
+    </delete>
+</mapper>

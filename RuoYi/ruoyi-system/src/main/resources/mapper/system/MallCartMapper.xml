@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+"http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.system.mapper.MallCartMapper">
+    
+    <resultMap type="MallCart" id="MallCartResult">
+        <result property="cartId"    column="cart_id"    />
+        <result property="userId"    column="user_id"    />
+        <result property="goodsId"    column="goods_id"    />
+        <result property="quantity"    column="quantity"    />
+        <result property="createTime"    column="create_time"    />
+        <result property="goodsName"    column="goods_name"    />
+        <result property="price"    column="price"    />
+        <result property="imageUrl"    column="image_url"    />
+    </resultMap>
+
+    <sql id="selectMallCartVo">
+        select c.cart_id, c.user_id, c.goods_id, c.quantity, c.create_time, g.goods_name, g.price, g.image_url
+        from mall_cart c
+        left join mall_goods g on c.goods_id = g.goods_id
+    </sql>
+
+    <select id="selectMallCartList" parameterType="MallCart" resultMap="MallCartResult">
+        <include refid="selectMallCartVo"/>
+        <where>
+            <if test="userId != null "> and c.user_id = #{userId}</if>
+            <if test="goodsId != null "> and c.goods_id = #{goodsId}</if>
+            <if test="quantity != null "> and c.quantity = #{quantity}</if>
+        </where>
+        order by c.create_time desc
+    </select>
+
+    <select id="selectMallCartByCartId" parameterType="Long" resultMap="MallCartResult">
+        <include refid="selectMallCartVo"/>
+        where c.cart_id = #{cartId}
+    </select>
+
+    <insert id="insertMallCart" parameterType="MallCart" useGeneratedKeys="true" keyProperty="cartId">
+        insert into mall_cart
+        <trim prefix="(" suffix=")" suffixOverrides=",">
+            <if test="userId != null">user_id,</if>
+            <if test="goodsId != null">goods_id,</if>
+            <if test="quantity != null">quantity,</if>
+            <if test="createTime != null">create_time,</if>
+         </trim>
+        <trim prefix="values (" suffix=")" suffixOverrides=",">
+            <if test="userId != null">#{userId},</if>
+            <if test="goodsId != null">#{goodsId},</if>
+            <if test="quantity != null">#{quantity},</if>
+            <if test="createTime != null">#{createTime},</if>
+         </trim>
+    </insert>
+
+    <update id="updateMallCart" parameterType="MallCart">
+        update mall_cart
+        <trim prefix="SET" suffixOverrides=",">
+            <if test="userId != null">user_id = #{userId},</if>
+            <if test="goodsId != null">goods_id = #{goodsId},</if>
+            <if test="quantity != null">quantity = #{quantity},</if>
+            <if test="createTime != null">create_time = #{createTime},</if>
+        </trim>
+        where cart_id = #{cartId}
+    </update>
+
+    <delete id="deleteMallCartByCartId" parameterType="Long">
+        delete from mall_cart where cart_id = #{cartId}
+    </delete>
+
+    <delete id="deleteMallCartByCartIds" parameterType="String">
+        delete from mall_cart where cart_id in
+        <foreach item="cartId" collection="array" open="(" separator="," close=")">
+            #{cartId}
+        </foreach>
+    </delete>
+
+    <select id="selectCartStatsList" resultType="java.util.HashMap">
+        select c.goods_id as goods_id,
+               g.goods_name as goods_name,
+               g.price as price,
+               g.image_url as image_url,
+               ifnull(sum(c.quantity), 0) as total_quantity,
+               count(*) as user_count,
+               max(c.create_time) as latest_time
+        from mall_cart c
+        left join mall_goods g on c.goods_id = g.goods_id
+        <where>
+            <if test="goodsName != null and goodsName != ''"> and g.goods_name like concat('%', #{goodsName}, '%')</if>
+        </where>
+        group by c.goods_id, g.goods_name, g.price, g.image_url
+    </select>
+</mapper>

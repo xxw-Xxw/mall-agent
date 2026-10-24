@@ -7,6 +7,17 @@ backend/*.jar
 # ===== 前端依赖与构建产物 =====
 web/node_modules/
 web/dist/
+RuoYi-Vue3/node_modules/
+RuoYi-Vue3/dist/
+
+# ===== Java 构建产物与日志 =====
+target/
+logs/
+*.class
+
+# ===== IDE =====
+.idea/
+*.iml
 
 # ===== Python =====
 __pycache__/

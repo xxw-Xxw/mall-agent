@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+"http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.system.mapper.MallFavoriteMapper">
+    
+    <resultMap type="MallFavorite" id="MallFavoriteResult">
+        <result property="favoriteId"    column="favorite_id"    />
+        <result property="userId"    column="user_id"    />
+        <result property="goodsId"    column="goods_id"    />
+        <result property="createTime"    column="create_time"    />
+    </resultMap>
+
+    <sql id="selectMallFavoriteVo">
+        select favorite_id, user_id, goods_id, create_time from mall_favorite
+    </sql>
+
+    <select id="selectMallFavoriteList" parameterType="MallFavorite" resultMap="MallFavoriteResult">
+        <include refid="selectMallFavoriteVo"/>
+        <where>  
+            <if test="userId != null "> and user_id = #{userId}</if>
+            <if test="goodsId != null "> and goods_id = #{goodsId}</if>
+        </where>
+    </select>
+    
+    <select id="selectMallFavoriteByFavoriteId" parameterType="Long" resultMap="MallFavoriteResult">
+        <include refid="selectMallFavoriteVo"/>
+        where favorite_id = #{favoriteId}
+    </select>
+
+    <insert id="insertMallFavorite" parameterType="MallFavorite" useGeneratedKeys="true" keyProperty="favoriteId">
+        insert into mall_favorite
+        <trim prefix="(" suffix=")" suffixOverrides=",">
+            <if test="userId != null">user_id,</if>
+            <if test="goodsId != null">goods_id,</if>
+            <if test="createTime != null">create_time,</if>
+         </trim>
+        <trim prefix="values (" suffix=")" suffixOverrides=",">
+            <if test="userId != null">#{userId},</if>
+            <if test="goodsId != null">#{goodsId},</if>
+            <if test="createTime != null">#{createTime},</if>
+         </trim>
+    </insert>
+
+    <update id="updateMallFavorite" parameterType="MallFavorite">
+        update mall_favorite
+        <trim prefix="SET" suffixOverrides=",">
+            <if test="userId != null">user_id = #{userId},</if>
+            <if test="goodsId != null">goods_id = #{goodsId},</if>
+            <if test="createTime != null">create_time = #{createTime},</if>
+        </trim>
+        where favorite_id = #{favoriteId}
+    </update>
+
+    <delete id="deleteMallFavoriteByFavoriteId" parameterType="Long">
+        delete from mall_favorite where favorite_id = #{favoriteId}
+    </delete>
+
+    <delete id="deleteMallFavoriteByFavoriteIds" parameterType="String">
+        delete from mall_favorite where favorite_id in
+        <foreach item="favoriteId" collection="array" open="(" separator="," close=")">
+            #{favoriteId}
+        </foreach>
+    </delete>
+
+    <select id="selectFavoriteStatsList" resultType="java.util.HashMap">
+        select f.goods_id as goods_id,
+               g.goods_name as goods_name,
+               g.price as price,
+               g.image_url as image_url,
+               count(*) as favorite_count,
+               max(f.create_time) as latest_time
+        from mall_favorite f
+        left join mall_goods g on f.goods_id = g.goods_id
+        <where>
+            <if test="goodsName != null and goodsName != ''"> and g.goods_name like concat('%', #{goodsName}, '%')</if>
+        </where>
+        group by f.goods_id, g.goods_name, g.price, g.image_url
+    </select>
+</mapper>

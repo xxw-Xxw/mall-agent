@@ -16,6 +16,7 @@ import com.ruoyi.common.annotation.Log;
 import com.ruoyi.common.core.controller.BaseController;
 import com.ruoyi.common.core.domain.AjaxResult;
 import com.ruoyi.common.enums.BusinessType;
+import com.ruoyi.system.client.AgentIndexClient;
 import com.ruoyi.system.domain.MallGoods;
 import com.ruoyi.system.service.IMallGoodsService;
 import com.ruoyi.common.utils.poi.ExcelUtil;
@@ -33,6 +34,9 @@ public class MallGoodsController extends BaseController
 {
     @Autowired
     private IMallGoodsService mallGoodsService;
+
+    @Autowired
+    private AgentIndexClient agentIndexClient;
 
     /**
      * 查询商城商品列表
@@ -77,7 +81,12 @@ public class MallGoodsController extends BaseController
     @PostMapping
     public AjaxResult add(@RequestBody MallGoods mallGoods)
     {
-        return toAjax(mallGoodsService.insertMallGoods(mallGoods));
+        int rows = mallGoodsService.insertMallGoods(mallGoods);
+        if (rows > 0)
+        {
+            agentIndexClient.upsert(mallGoods.getGoodsId());
+        }
+        return toAjax(rows);
     }
 
     /**
@@ -88,7 +97,20 @@ public class MallGoodsController extends BaseController
     @PutMapping
     public AjaxResult edit(@RequestBody MallGoods mallGoods)
     {
-        return toAjax(mallGoodsService.updateMallGoods(mallGoods));
+        int rows = mallGoodsService.updateMallGoods(mallGoods);
+        if (rows > 0)
+        {
+            MallGoods saved = mallGoodsService.selectMallGoodsByGoodsId(mallGoods.getGoodsId());
+            if (saved != null && "0".equals(saved.getStatus()) && !"2".equals(saved.getDelFlag()))
+            {
+                agentIndexClient.upsert(saved.getGoodsId());
+            }
+            else
+            {
+                agentIndexClient.delete(mallGoods.getGoodsId());
+            }
+        }
+        return toAjax(rows);
     }
 
     /**
@@ -99,6 +121,14 @@ public class MallGoodsController extends BaseController
 	@DeleteMapping("/{goodsIds}")
     public AjaxResult remove(@PathVariable Long[] goodsIds)
     {
-        return toAjax(mallGoodsService.deleteMallGoodsByGoodsIds(goodsIds));
+        int rows = mallGoodsService.deleteMallGoodsByGoodsIds(goodsIds);
+        if (rows > 0)
+        {
+            for (Long goodsId : goodsIds)
+            {
+                agentIndexClient.delete(goodsId);
+            }
+        }
+        return toAjax(rows);
     }
 }

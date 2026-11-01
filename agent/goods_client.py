@@ -16,6 +16,14 @@ async def list_goods(keyword=None, sort_field=None, page_size=200):
     return resp.json()
 
 
+async def list_goods_page(page_num=1, page_size=200):
+    """分页拉取在售商品（status=0 且未删除），用于定时对账。"""
+    resp = await _client.get("/store/goods/list",
+                             params={"pageNum": page_num, "pageSize": page_size})
+    resp.raise_for_status()
+    return resp.json()
+
+
 async def get_goods(goods_id):
     resp = await _client.get(f"/store/goods/{goods_id}")
     resp.raise_for_status()

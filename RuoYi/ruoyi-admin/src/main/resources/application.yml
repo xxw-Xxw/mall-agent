@@ -145,3 +145,9 @@ xss:
   excludes: /system/notice
   # 匹配链接
   urlPatterns: /system/*,/monitor/*,/tool/*
+
+# 商城 AI 导购配置
+mall:
+  agent:
+    # AI 导购服务地址，商品增删改后异步同步向量库
+    base-url: http://127.0.0.1:8090

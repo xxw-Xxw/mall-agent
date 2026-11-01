@@ -4,7 +4,7 @@ import json
 from langchain_core.tools import tool
 
 import goods_client
-from chroma_client import raw_semantic_query
+from chroma_client import hybrid_search
 from defenses import named_category_segment_in, to_float, to_int
 
 _category_cache = None
@@ -67,7 +67,7 @@ async def _compact(g):
 
 
 async def semantic_rows(query, min_price=None, max_price=None):
-    hits = await raw_semantic_query(query, min_price, max_price, top_k=10)
+    hits = await hybrid_search(query, min_price, max_price, top_k=10)
     cats = await category_names()
     wanted = await named_category_segment(query)
     out = []

@@ -1,6 +1,9 @@
+import asyncio
 import json
+import logging
 import time
-from datetime import datetime
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta
 
 import httpx
 from fastapi import FastAPI
@@ -13,10 +16,46 @@ import tools
 from chroma_client import embed_texts
 from defenses import strip_recommend
 from graph import graph, llm, saver
-from reindex import reindex as run_reindex
+from reindex import delete_goods, reconcile as run_reconcile, reindex as run_reindex, upsert_goods
 from settings import settings
 
-app = FastAPI(title="mall-agent")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+log = logging.getLogger("mall-agent")
+
+
+def _seconds_until(hour):
+    now = datetime.now()
+    target = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+    if target <= now:
+        target += timedelta(days=1)
+    return (target - now).total_seconds()
+
+
+async def _reconcile_loop():
+    """每日定时对账：补齐漏同步/变更商品，并删除已下架或已删除商品的向量。"""
+    while True:
+        await asyncio.sleep(_seconds_until(settings.reconcile_hour))
+        try:
+            result = await run_reconcile()
+            log.info("定时向量对账完成: %s", result)
+        except Exception as e:
+            log.warning("定时向量对账异常: %s", e)
+
+
+@asynccontextmanager
+async def lifespan(app):
+    task = None
+    if settings.reconcile_enabled:
+        task = asyncio.create_task(_reconcile_loop())
+        log.info("定时向量对账已开启，每天 %02d:00 执行", settings.reconcile_hour)
+    try:
+        yield
+    finally:
+        if task:
+            task.cancel()
+
+
+app = FastAPI(title="mall-agent", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
@@ -80,6 +119,24 @@ async def chat_sync(req: ChatRequest):
 @app.post("/agent/reindex")
 async def reindex(enhance: bool = True):
     return await run_reindex(enhance)
+
+
+@app.post("/agent/goods/{goods_id}/index")
+async def index_goods(goods_id: int):
+    """单个商品增量入向量库（商品新增/编辑后由商城后端调用）。"""
+    return await upsert_goods(goods_id)
+
+
+@app.delete("/agent/goods/{goods_id}/index")
+async def remove_goods_index(goods_id: int):
+    """单个商品从向量库移除（商品删除/下架后由商城后端调用）。"""
+    return delete_goods(goods_id)
+
+
+@app.post("/agent/reconcile")
+async def reconcile():
+    """手动触发向量库对账（定时任务之外的兜底入口，也在启动排障时用）。"""
+    return await run_reconcile()
 
 
 @app.delete("/agent/session/{session_id}")

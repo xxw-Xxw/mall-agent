@@ -75,6 +75,7 @@ async def chat(req: ChatRequest):
     config = {"configurable": {"thread_id": session_id}, "recursion_limit": 15}
 
     async def gen():
+        last_step = None
         try:
             async for chunk, meta in graph.astream(
                     {"messages": [HumanMessage(content=message)]}, config, stream_mode="messages"):
@@ -82,6 +83,12 @@ async def chat(req: ChatRequest):
                     continue
                 if meta.get("langgraph_node") != "agent":
                     continue
+                # agent 可能执行多轮（抢答被编排层否决 → 强制检索 → 重新作答）。
+                # 检测到新一轮 agent（step 变化）时通知前端清空上一轮内容，只保留最终答复。
+                step = meta.get("langgraph_step")
+                if last_step is not None and step != last_step:
+                    yield _sse("reset", {"ok": True})
+                last_step = step
                 piece = chunk.content
                 if isinstance(piece, str) and piece:
                     yield _sse("delta", {"text": piece})

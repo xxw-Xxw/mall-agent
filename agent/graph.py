@@ -1,3 +1,4 @@
+import asyncio
 import re
 from typing import Annotated, Any, TypedDict
 
@@ -34,6 +35,7 @@ SYSTEM_PROMPT = """你是「橙心优选」商城的 AI 导购助手"小橙"，�
 9. 用户要求"还有别的吗"、"再推荐几款"、"换一批" → 必须换关键词、放宽价格或切换检索工具重新查询，不能直接复用上一轮结果；确实没有新结果时如实说明。
 10. 可以多次、组合调用不同工具，直到信息足够回答为止；如果一次搜索结果相关度不高，可以换关键词或改用另一个搜索工具再试一次。
 11. 用户只回复序号（例如"1"、"第2个"、"选3"）时，指代上一轮你列出的第 N 项商品 → 按该商品名重新调用工具检索，不要凭序号猜测商品。
+12. 需要调用工具时，本轮只输出工具调用，不要同时输出回答正文或结论；等工具结果返回后再一次性作答。
 
 ## 防幻觉硬规则（必须严格遵守）
 1. 只能推荐工具返回结果中出现过的商品，商品名、价格、品牌、参数必须与工具返回完全一致。
@@ -43,13 +45,15 @@ SYSTEM_PROMPT = """你是「橙心优选」商城的 AI 导购助手"小橙"，�
 5. 商品类型必须严格匹配：用户要手机就只推荐手机，不能把手表、耳机、平板等其他类型商品当作用户要的类型来推荐；如果同类型商品不足或没有，如实说明，相关配件只能明确标注为"搭配建议"单独列出。注意看每件商品的 category 字段来确认类型。
 6. 用户想要的品类在工具结果里不存在时（例如雨伞、雨靴），明确说明"商城暂未找到该品类的商品"，禁止用相近品类顶替（不能把冲锋衣、帐篷、登山包当作雨具推荐），也禁止凭常识列举商城没有的品类清单。
 7. 工具返回 `matchedBy: semantic` 时，说明这批结果来自语义/品类兜底，可能是同品类商品；先判断品类是否与用户需求一致，一致就正常推荐，只有明显不符（如用户要雨伞却返回冲锋衣）才说明暂无。
+8. 商品的功能、参数、卖点只能来自工具返回的 description、tags 等字段；工具未提及的功能（如具体的健康监测项、通知功能、防水等级）不要凭自己的产品知识补充，可提示用户以商品详情页为准。
 
 ## 回答要求
 1. 使用中文，语气亲切自然，像一位热情专业的导购，可少量使用 emoji。
 2. 推荐商品时给出简短理由，结合真实卖点，一次最多推荐 5 款。
 3. 回答简洁分点，避免长篇大论。
 4. 每次回答的最后一行必须独立成行输出：RECOMMEND:商品ID1,商品ID2,...（本次推荐商品ID，英文逗号分隔；若没有推荐则输出 RECOMMEND:无）。该行必须是全文最后一行，且该行之外不要输出任何格式标记。
-5. 不要向用户解释检索方式、相关度、重排等内部机制，直接给结论和推荐理由；不要在正文输出图片、Markdown 图片语法或任何链接（商品图由下方商品卡片展示），也不要输出 goodsId、categoryId 等内部字段。"""
+5. 不要向用户解释检索方式、相关度、重排等内部机制，直接给结论和推荐理由；不要在正文输出图片、Markdown 图片语法或任何链接（商品图由下方商品卡片展示），也不要输出 goodsId、categoryId 等内部字段。
+6. 一次回答只包含一个结论段加最多 5 条要点；同一卖点只说一次，不要先总述再重复列举同一批内容，也不要出现两次"综合来看"之类的总结。"""
 
 llm = ChatOpenAI(
     model=settings.llm_model,
@@ -88,22 +92,24 @@ async def agent_node(state: AgentState):
     return {"messages": [response]}
 
 
+async def _run_tool_call(call, query_text):
+    fn = tools.TOOL_MAP.get(call["name"])
+    args = dict(call["args"] or {})
+    if call["name"] in ("searchGoods", "searchGoodsSemantic"):
+        budget = parse_budget(query_text)
+        if budget and not args.get("maxPrice") and not args.get("minPrice"):
+            args["maxPrice"] = budget
+    try:
+        output = await fn.ainvoke(args) if fn is not None else json_error(f"未知工具：{call['name']}")
+    except Exception as e:
+        output = json_error(f"工具执行失败：{e}")
+    return ToolMessage(content=output, tool_call_id=call["id"])
+
+
 async def tools_node(state: AgentState):
     last = state["messages"][-1]
-    results = []
-    for call in last.tool_calls:
-        fn = tools.TOOL_MAP.get(call["name"])
-        args = dict(call["args"] or {})
-        if call["name"] in ("searchGoods", "searchGoodsSemantic"):
-            query_text = state.get("query") or ""
-            budget = parse_budget(query_text)
-            if budget and not args.get("maxPrice") and not args.get("minPrice"):
-                args["maxPrice"] = budget
-        try:
-            output = await fn.ainvoke(args) if fn is not None else json_error(f"未知工具：{call['name']}")
-        except Exception as e:
-            output = json_error(f"工具执行失败：{e}")
-        results.append(ToolMessage(content=output, tool_call_id=call["id"]))
+    query_text = state.get("query") or ""
+    results = list(await asyncio.gather(*[_run_tool_call(call, query_text) for call in last.tool_calls]))
     return {"messages": results, "llm_messages": state["llm_messages"] + [last] + results, "tool_used": True}
 
 

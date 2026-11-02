@@ -67,17 +67,39 @@ def parse_budget(message):
     return v * 1.15 if approx else v
 
 
+def category_matches(seg, category, goods_name):
+    """品类片段匹配：分类名或商品名命中即可（商城分类较粗，如"户外装备"下同时有帐篷、登山包）。"""
+    if not seg:
+        return True
+    return seg in str(category or "") or seg in str(goods_name or "")
+
+
 def named_category_segment_in(query, cats):
+    """识别用户点名的品类：优先叶子分类，其次一级分类，最后口语别名。
+
+    别名命中时返回别名本身而不是映射的父类，避免"帐篷"被放大成"户外装备"导致跨品类推荐。
+    """
     if not query or not query.strip():
         return None
+    leaves = []
+    parents = []
     for name in cats.values():
-        for part in str(name).split("/"):
-            seg = part.strip()
-            if len(seg) >= 2 and seg in query:
-                return seg
-    for alias, target in CATEGORY_ALIASES.items():
+        parts = [p.strip() for p in str(name).split("/") if p.strip()]
+        if not parts:
+            continue
+        if len(parts) == 1:
+            parents.append(parts[0])
+        else:
+            leaves.append(parts[-1])
+    for leaf in leaves:
+        if len(leaf) >= 2 and leaf in query:
+            return leaf
+    for parent in parents:
+        if len(parent) >= 2 and parent in query:
+            return parent
+    for alias in CATEGORY_ALIASES:
         if alias in query:
-            return target
+            return alias
     return None
 
 
@@ -122,5 +144,5 @@ def fuzzy_name_match(reply, name):
 def guard_prompt_text(message, seg, goods_json):
     return (message + "\n[系统注：用户点名的商品类型是「" + seg + "」。\n"
             + "商城在售该类型的商品（真实数据）：\n" + goods_json + "\n"
-            + "请只基于以上商品回答；推荐里只能出现以上出现过的商品；"
-            + "若以上没有合适的，如实说明并礼貌追问需求，不要改推其他类型商品]")
+            + "以上商品可直接作为推荐依据；如果工具返回了更多同类型商品，也可以一并参考。"
+            + "推荐里只能出现工具返回过的商品；若没有合适的，如实说明并礼貌追问需求，不要改推其他类型商品]")

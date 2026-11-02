@@ -5,7 +5,7 @@ from langchain_core.tools import tool
 
 import goods_client
 from chroma_client import hybrid_search
-from defenses import named_category_segment_in, to_float, to_int
+from defenses import category_matches, named_category_segment_in, to_float, to_int
 
 _category_cache = None
 _lock = asyncio.Lock()
@@ -73,7 +73,7 @@ async def semantic_rows(query, min_price=None, max_price=None):
     out = []
     for text, md in hits:
         category = cats.get(to_int(md.get("categoryId")), "")
-        if wanted is not None and wanted not in category:
+        if not category_matches(wanted, category, md.get("goodsName")):
             continue
         snippet = text or ""
         out.append({

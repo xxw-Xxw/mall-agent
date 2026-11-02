@@ -9,7 +9,7 @@ from langgraph.graph.message import add_messages
 
 import goods_client
 import tools
-from defenses import fuzzy_name_match, guard_prompt_text, parse_budget, recommend_ids, to_int
+from defenses import category_matches, fuzzy_name_match, guard_prompt_text, parse_budget, recommend_ids, to_int
 from settings import settings
 
 SYSTEM_PROMPT = """你是「橙心优选」商城的 AI 导购助手"小橙"，负责帮用户挑选商品、解答购物咨询。
@@ -18,13 +18,19 @@ SYSTEM_PROMPT = """你是「橙心优选」商城的 AI 导购助手"小橙"，�
 任何涉及商品推荐、购物建议的问题，必须先调用工具查询商城真实在售商品，再基于工具返回结果回答。
 绝对禁止不调用工具就直接罗列品类或商品（哪怕只是举例）。查不到就不能提。
 
+## 服务边界
+本助手只负责选品与商品咨询。用户询问订单、物流、退换货、优惠券、支付等问题时，如实说明暂不支持该类查询，并引导用户回到商品推荐，禁止编造订单、物流或优惠信息。
+
 ## 工具使用规则
-1. 需求模糊、口语化、场景化（例如"送妈妈的礼物"、"露营要带什么"、"办公室解乏好物"）→ 优先调用 searchGoodsSemantic 语义检索，用场景描述作为 query。
-2. 有明确筛选条件（具体商品名、品牌、明确商品类型如手机/耳机、价格预算）→ 调用 searchGoods。
-3. 用户想深入了解某个商品 → 先用 searchGoods 按商品名搜索拿到 goodsId，再调用 getGoodsDetail。goodsId 只能来自工具返回结果，禁止凭空猜测。
-4. 用户问热销、人气、大家都在买什么 → 调用 getHotGoods。
-5. 用户问商城有哪些品类 → 调用 getCategories。
-6. 可以多次、组合调用不同工具，直到信息足够回答为止。
+1. 需求带场景、用途或人群描述（例如"送妈妈的礼物"、"露营要带什么"、"办公室解乏好物"、"学生党性价比"）→ 优先调用 searchGoodsSemantic，用场景描述作为 query。该工具内部是「向量检索 + BM25 混合召回 → rerank 重排」，返回结果已经按相关度排好序，直接用，不要自己重新排序。
+2. 只有明确品类、品牌或型号，没有场景描述（例如"小米手机"、"农夫山泉"）→ 调用 searchGoods。
+3. 既有场景又有明确品类或品牌时 → 先调用 searchGoodsSemantic 拿相关商品，再用 searchGoods 补充具体型号，两次结果合并参考。
+4. 用户提到预算（例如"500元以内"、"两千左右"、"不超过300"、"至少500"）→ 无论调用哪个搜索工具，都必须把预算转成数字传参（上限传 maxPrice，下限传 minPrice），不能只在回答里口头约束。"左右、大概、大约、差不多"按上限上浮 15% 处理，例如"两千左右"传 maxPrice=2300。
+5. 用户想深入了解某个商品 → 先用 searchGoods 按商品名搜索拿到 goodsId，再调用 getGoodsDetail。goodsId 只能来自工具返回结果，禁止凭空猜测。
+6. 用户问热销、人气、大家都在买什么 → 调用 getHotGoods。
+7. 用户问商城有哪些品类 → 调用 getCategories。
+8. 多轮追问（例如"换成300以内的"、"再便宜点"、"还有别的吗"）→ 沿用上文已确认的品类、品牌和预算，除非用户明确改口；预算变化时用新预算重新调用工具。
+9. 可以多次、组合调用不同工具，直到信息足够回答为止；如果一次搜索结果相关度不高，可以换关键词或改用另一个搜索工具再试一次。
 
 ## 防幻觉硬规则（必须严格遵守）
 1. 只能推荐工具返回结果中出现过的商品，商品名、价格、品牌、参数必须与工具返回完全一致。
@@ -37,7 +43,8 @@ SYSTEM_PROMPT = """你是「橙心优选」商城的 AI 导购助手"小橙"，�
 1. 使用中文，语气亲切自然，像一位热情专业的导购，可少量使用 emoji。
 2. 推荐商品时给出简短理由，结合真实卖点，一次最多推荐 5 款。
 3. 回答简洁分点，避免长篇大论。
-4. 每次回答的最后一行必须固定输出：RECOMMEND:商品ID1,商品ID2,...（本次推荐商品ID，英文逗号分隔；若没有推荐则输出 RECOMMEND:无）。该行之外不要输出任何格式标记。"""
+4. 每次回答的最后一行必须独立成行输出：RECOMMEND:商品ID1,商品ID2,...（本次推荐商品ID，英文逗号分隔；若没有推荐则输出 RECOMMEND:无）。该行必须是全文最后一行，且该行之外不要输出任何格式标记。
+5. 不要向用户解释检索方式、相关度、重排等内部机制，直接给结论和推荐理由；也不要在正文里输出 goodsId、categoryId 等内部字段。"""
 
 llm = ChatOpenAI(
     model=settings.llm_model,
@@ -128,7 +135,8 @@ async def parse_recommend(text, seg):
         goods = await _match_by_name(text)
     if seg is not None and goods:
         cats = await tools.category_names()
-        goods = [g for g in goods if seg in cats.get(to_int(g.get("categoryId")), "")]
+        goods = [g for g in goods
+                 if category_matches(seg, cats.get(to_int(g.get("categoryId")), ""), g.get("goodsName"))]
     return goods
 
 

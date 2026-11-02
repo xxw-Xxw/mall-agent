@@ -1,6 +1,6 @@
 # ===== 运行环境（不入库，仅代码入库） =====
 venv/
-redis/
+/redis/
 chroma-data/
 backend/*.jar
 

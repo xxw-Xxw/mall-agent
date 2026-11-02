@@ -122,7 +122,7 @@ async def search_goods_semantic_impl(query, max_price=None, min_price=None):
         return _err("语义检索暂不可用（可能向量库未灌入数据，或向量化服务异常）", e)
 
 
-@tool("searchGoods", description="按关键词搜索商城在售商品。用户提到具体商品名、品牌、明确商品类型（如手机、耳机）或价格预算时优先使用")
+@tool("searchGoods", description="按关键词搜索商城在售商品。用户提到具体商品名、品牌或明确商品类型（如手机、耳机）时优先使用；预算通过 maxPrice/minPrice 参数传入，不作为选择本工具的依据")
 async def search_goods(keyword, minPrice=None, maxPrice=None):
     """按关键词搜索商城在售商品。
 

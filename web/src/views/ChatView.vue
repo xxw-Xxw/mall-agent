@@ -80,10 +80,6 @@ function handleEvent(msg, block) {
     msg.raw += data.text
     renderStreaming(msg)
     scrollTop()
-  } else if (event === 'reset') {
-    // 后端检测到模型抢答被否决、将重新作答：清空已累积内容，只保留最终答复
-    msg.raw = ''
-    renderStreaming(msg)
   } else if (event === 'goods' && Array.isArray(data)) {
     msg.goods = data
     scrollTop()

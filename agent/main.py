@@ -9,7 +9,7 @@ import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from langchain_core.messages import AIMessageChunk, HumanMessage
+from langchain_core.messages import AIMessageChunk, HumanMessage, ToolMessage
 from pydantic import BaseModel
 
 import tools
@@ -75,23 +75,32 @@ async def chat(req: ChatRequest):
     config = {"configurable": {"thread_id": session_id}, "recursion_limit": 15}
 
     async def gen():
-        last_step = None
+        # 缓冲制：工具执行前的 agent 轮次（抢答）只缓冲不外发；工具执行完毕后
+        # 最终轮统一流式输出；全程无工具的普通对话在流结束时一次性吐出缓冲。
+        pending = []
+        tools_ran = False
+        sent_any = False
         try:
             async for chunk, meta in graph.astream(
                     {"messages": [HumanMessage(content=message)]}, config, stream_mode="messages"):
-                if not isinstance(chunk, AIMessageChunk):
+                node = meta.get("langgraph_node")
+                if isinstance(chunk, ToolMessage):
+                    if node == "tools":
+                        tools_ran = True
+                        pending.clear()
                     continue
-                if meta.get("langgraph_node") != "agent":
+                if not isinstance(chunk, AIMessageChunk) or node != "agent":
                     continue
-                # agent 可能执行多轮（抢答被编排层否决 → 强制检索 → 重新作答）。
-                # 检测到新一轮 agent（step 变化）时通知前端清空上一轮内容，只保留最终答复。
-                step = meta.get("langgraph_step")
-                if last_step is not None and step != last_step:
-                    yield _sse("reset", {"ok": True})
-                last_step = step
                 piece = chunk.content
-                if isinstance(piece, str) and piece:
+                if not (isinstance(piece, str) and piece):
+                    continue
+                if tools_ran:
+                    sent_any = True
                     yield _sse("delta", {"text": piece})
+                else:
+                    pending.append(piece)
+            if not sent_any and pending:
+                yield _sse("delta", {"text": "".join(pending)})
             state = await graph.aget_state(config)
             goods = state.values.get("recommend_goods") or []
             if goods:

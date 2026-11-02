@@ -42,12 +42,23 @@ function pushMessage(role, text, goods = null, streaming = false) {
   return msg
 }
 
+function stripLinks(text) {
+  return (text || '')
+    .replace(/!\[[^\]]*\]\([^)\s]*\)?/g, '')
+    .replace(/\[([^\]]+)\]\([^)\s]*\)?/g, '$1')
+    .replace(/https?:\/\/[^\s)]+/g, '')
+}
+
 function renderStreaming(msg) {
-  let lines = msg.raw.split('\n')
+  let lines = stripLinks(msg.raw).split('\n')
   if (msg.streaming && lines.length && /RECOMMEND/i.test(lines[lines.length - 1])) {
     lines = lines.slice(0, -1)
   }
-  msg.text = lines.filter((l) => !/RECOMMEND[:：]/i.test(l)).join('\n')
+  msg.text = lines
+    .filter((l) => !/RECOMMEND[:：]/i.test(l))
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
 }
 
 function handleEvent(msg, block) {

@@ -200,6 +200,9 @@ async def get_goods_detail(goodsId):
         data = (resp or {}).get("data")
         if data is None:
             return _dumps({"error": "未找到该商品。请先用 searchGoods 以商品名作为关键词搜索，拿到正确的 goodsId 后再查询"})
+        if isinstance(data, dict):
+            goods = data.get("goods") if isinstance(data.get("goods"), dict) else data
+            goods.pop("imageUrl", None)
         return _dumps(data)
     except Exception as e:
         return _err("查询商品详情失败", e)

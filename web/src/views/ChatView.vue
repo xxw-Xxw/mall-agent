@@ -1,5 +1,5 @@
 <script setup>
-import { ref, nextTick, onMounted } from 'vue'
+import { ref, nextTick, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
 const router = useRouter()
@@ -36,11 +36,40 @@ function sessionId() {
 }
 
 function pushMessage(role, text, goods = null, streaming = false) {
-  const msg = { role, raw: text, text, goods, streaming, time: now() }
-  messages.value.push(msg)
+  messages.value.push({ role, raw: text, text, goods, streaming, time: now() })
   scrollTop()
-  return msg
+  // 必须返回响应式代理而不是原始对象：直接改原始对象不会触发视图更新和 watch，
+  // 会导致流式打字机失效、且持久化到 sessionStorage 的 AI 消息内容为空
+  return messages.value[messages.value.length - 1]
 }
+
+// 会话记录持久化：与 sessionId 同存于 sessionStorage（关标签页即失效，与后端会话上下文生命周期一致）
+const HISTORY_KEY = 'mall_agent_history'
+
+function saveHistory() {
+  try {
+    const list = messages.value.slice(-50).map((m) => ({ role: m.role, raw: m.raw, goods: m.goods, time: m.time }))
+    sessionStorage.setItem(HISTORY_KEY, JSON.stringify(list))
+  } catch { /* 存储满或被禁用时静默跳过 */ }
+}
+
+function restoreHistory() {
+  try {
+    const raw = sessionStorage.getItem(HISTORY_KEY)
+    if (!raw) return false
+    const list = JSON.parse(raw)
+    if (!Array.isArray(list) || !list.length) return false
+    for (const m of list) {
+      const msg = pushMessage(m.role, m.raw || '', m.goods || null, false)
+      renderStreaming(msg)
+    }
+    return true
+  } catch {
+    return false
+  }
+}
+
+watch(messages, saveHistory, { deep: true })
 
 function stripLinks(text) {
   return (text || '')
@@ -136,6 +165,7 @@ async function send(preset) {
 }
 
 onMounted(() => {
+  if (restoreHistory()) return
   pushMessage('ai', '您好！我是 AI 导购小橙 🤖\n\n我已接入真实 AI 能力，可以：\n· 理解口语化需求做语义选品（如"露营带什么"）\n· 查真实库存、价格、参数，回答商品咨询\n· 推荐可点击跳转的真实商品\n\n试试下面的快捷提问，或直接描述您的需求～')
 })
 </script>

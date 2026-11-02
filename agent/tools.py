@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 
 from langchain_core.tools import tool
 
@@ -66,6 +67,28 @@ async def _compact(g):
     }
 
 
+_STOPWORDS = re.compile(r"我想|我要|想买|购买|买|要|请|帮我|推荐|一下|一个|几款|几件|几|款|件|什么|好的|好|的|吗|呢|啊|吧|元|钱|以内|以下|左右|大概|有没有|有|卖|商城|可以|能|我|你")
+_SCENEWORDS = re.compile(r"送|礼|妈妈|爸爸|妈|爸|学生|办公|户外|露营|通勤|解乏|性价比|生日|节日|搭配|场合|老人|孩子|儿童|男生|女生|男|女|居家|旅行")
+
+
+def concrete_term(text):
+    """提取查询里的具体商品词；含场景/人群词时返回空串，不做词面校验。"""
+    t = re.sub(r"[^\u4e00-\u9fff]", "", str(text or ""))
+    if _SCENEWORDS.search(t):
+        return ""
+    t = _STOPWORDS.sub("", t)
+    return t if 2 <= len(t) <= 6 else ""
+
+
+def relevance_filter(query, rows, seg=None):
+    if seg:
+        return rows
+    term = concrete_term(query)
+    if not term:
+        return rows
+    return [r for r in rows if _lexical_overlap(term, r)]
+
+
 async def semantic_rows(query, min_price=None, max_price=None):
     hits = await hybrid_search(query, min_price, max_price, top_k=10)
     cats = await category_names()
@@ -86,7 +109,22 @@ async def semantic_rows(query, min_price=None, max_price=None):
             "sales": md.get("sales"),
             "snippet": snippet[:150] + "..." if len(snippet) > 150 else snippet,
         })
-    return out
+    return relevance_filter(query, out, wanted)
+
+
+def _tokens(text):
+    t = (str(text or "")).lower()
+    toks = set(re.findall(r"[a-z0-9]{2,}", t))
+    han = re.sub(r"[^\u4e00-\u9fff]", "", t)
+    toks |= {han[i:i + 2] for i in range(len(han) - 1)}
+    return toks
+
+
+def _lexical_overlap(query, row):
+    """语义兜底时做词面校验，避免把毫不相关的品类当成结果返回。"""
+    q = _tokens(query)
+    d = _tokens((row.get("goodsName") or "") + (row.get("brand") or "") + (row.get("category") or ""))
+    return bool(q & d)
 
 
 async def search_goods_impl(keyword, min_price=None, max_price=None):
@@ -103,8 +141,12 @@ async def search_goods_impl(keyword, min_price=None, max_price=None):
         result = {}
         if not out and keyword and keyword.strip():
             seg = await named_category_segment(keyword)
-            out = await semantic_rows(seg if seg else keyword, min_price, max_price)
+            if seg:
+                out = await semantic_rows(seg, min_price, max_price)
+            else:
+                out = relevance_filter(keyword, await semantic_rows(keyword, min_price, max_price), seg)
             result["matchedBy"] = "semantic"
+            result["note"] = "关键词没有精确匹配，以下为同品类或语义相近商品，可直接推荐；只有与用户所需品类明显不符时才说明暂无"
         else:
             result["matchedBy"] = "keyword"
         result["count"] = len(out)

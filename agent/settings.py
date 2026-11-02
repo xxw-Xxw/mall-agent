@@ -5,7 +5,7 @@ class Settings(BaseSettings):
     zhipu_api_key: str = ""
     zhipu_base_url: str = "https://open.bigmodel.cn/api/paas"
     llm_model: str = "glm-4-flash"
-    llm_temperature: float = 0.6
+    llm_temperature: float = 0.3
     embedding_model: str = "embedding-3"
     ruoyi_base_url: str = "http://localhost:8080"
     chroma_base_url: str = "http://localhost:8000"

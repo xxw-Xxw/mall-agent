@@ -107,6 +107,31 @@ def strip_recommend(text):
     return RECOMMEND_LINE.sub("", text or "").strip()
 
 
+SHOP_INTENT = re.compile(r"买|购|推荐|好物|礼物|入手|挑|需要|想要|来点|有什么")
+
+
+def looks_shop_intent(text):
+    """判断这句话是否表达了购物/推荐意图，用于强制补检索。"""
+    return bool(SHOP_INTENT.search(text or ""))
+
+
+def resolve_numeric_choice(raw, prev_assistant):
+    """用户只回复序号（"1"、"第2个"、"选3"）时，还原成上一轮列表中的对应商品名。"""
+    if not prev_assistant:
+        return None
+    m = re.fullmatch(r"\s*(?:选|要|第)?\s*([1-9])\s*(?:个|款|件|号)?\s*(?:就|要)?(?:这个|它|这款|那款)?\s*", raw or "")
+    if not m:
+        return None
+    idx = int(m.group(1))
+    items = re.findall(r"(?m)^\s*(?:[\(（]?([1-9])[\)）\.、:：]\s+)(.+)", prev_assistant)
+    text = {int(no): body.strip() for no, body in items}.get(idx)
+    if not text:
+        return None
+    name = re.split(r"[：:，,。；;（(]", text)[0].strip()
+    return name or None
+
+
+
 def recommend_ids(text):
     m = RECOMMEND_LINE.search(text or "")
     if not m:

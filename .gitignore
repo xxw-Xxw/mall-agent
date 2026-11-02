@@ -13,6 +13,7 @@ RuoYi-Vue3/dist/
 # ===== Java 构建产物与日志 =====
 target/
 logs/
+*.log
 *.class
 
 # ===== IDE =====

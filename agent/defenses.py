@@ -165,9 +165,3 @@ def fuzzy_name_match(reply, name):
         prev = cur
     return best >= min_len
 
-
-def guard_prompt_text(message, seg, goods_json):
-    return (message + "\n[系统注：用户点名的商品类型是「" + seg + "」。\n"
-            + "商城在售该类型的商品（真实数据）：\n" + goods_json + "\n"
-            + "以上商品可直接作为推荐依据；如果工具返回了更多同类型商品，也可以一并参考。"
-            + "推荐里只能出现工具返回过的商品；若没有合适的，如实说明并礼貌追问需求，不要改推其他类型商品]")

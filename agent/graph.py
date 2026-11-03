@@ -10,7 +10,7 @@ from langgraph.graph.message import add_messages
 
 import goods_client
 import tools
-from defenses import category_matches, fuzzy_name_match, guard_prompt_text, looks_shop_intent, parse_budget, recommend_ids, resolve_numeric_choice, to_int
+from defenses import category_matches, fuzzy_name_match, looks_shop_intent, parse_budget, recommend_ids, resolve_numeric_choice, to_int
 from settings import settings
 
 SYSTEM_PROMPT = """你是「橙心优选」商城的 AI 导购助手"小橙"，负责帮用户挑选商品、解答购物咨询。
@@ -79,12 +79,9 @@ async def preprocess(state: AgentState):
     choice = resolve_numeric_choice(raw, prev_ai)
     if choice:
         raw = f"我想买{choice}"
-    seg = await tools.named_category_segment(raw)
-    guarded = raw
-    if seg is not None:
-        goods_json = await tools.search_goods_impl(seg, None, parse_budget(raw))
-        guarded = guard_prompt_text(raw, seg, goods_json)
-    return {"llm_messages": msgs[:-1] + [HumanMessage(content=guarded)], "query": raw, "tool_used": False}
+    # 不在 preprocess 查 RuoYi：品类校验、价格过滤、ID 回查全部延后到 tools 层和 postprocess，
+    # 减少一次同步 HTTP 调用，加快首 token 到达时间
+    return {"llm_messages": msgs[:-1] + [HumanMessage(content=raw)], "query": raw, "tool_used": False}
 
 
 async def agent_node(state: AgentState):

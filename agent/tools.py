@@ -5,8 +5,8 @@ import re
 from langchain_core.tools import tool
 
 import goods_client
-from chroma_client import hybrid_search
-from defenses import category_matches, named_category_segment_in, to_float, to_int
+from chroma_client import bm25_search, hybrid_search
+from defenses import category_matches, named_category_segment_in, pairing_source, to_float, to_int
 
 _category_cache = None
 _lock = asyncio.Lock()
@@ -34,15 +34,40 @@ async def category_names():
         return loaded
 
 
-async def category_of(category_id):
-    cats = await category_names()
-    return cats.get(to_int(category_id), "")
-
-
 async def named_category_segment(query):
     if not query or not query.strip():
         return None
     return named_category_segment_in(query, await category_names())
+
+
+async def pairing_tool_calls(query, limit=3):
+    """为"A 适合搭配什么"这类问题生成兄弟品类检索调用。
+
+    模型遇到这类咨询常常只给文字建议、不去检索（实测"手机适合搭配什么"稳定 0 卡片），
+    这里由编排层兜底：定位主商品所在的一级分类，取同级的其他二级分类作为搭配候选。
+    """
+    src = pairing_source(query)
+    if not src:
+        return []
+    cats = await category_names()
+    seg = named_category_segment_in(src, cats)
+    if not seg:
+        return []
+    parent = None
+    for path in cats.values():
+        if "/" in path and seg in path:
+            parent = path.split("/")[0]
+            break
+    if not parent:
+        return []
+    leaves = []
+    for path in cats.values():
+        if path.startswith(parent + "/") and seg not in path and path not in leaves:
+            leaves.append(path)
+    return [
+        {"name": "searchGoods", "args": {"keyword": path.split("/")[-1]}, "id": f"pair-{i}", "type": "tool_call"}
+        for i, path in enumerate(leaves[:limit])
+    ]
 
 
 def _dumps(obj):
@@ -112,6 +137,30 @@ async def semantic_rows(query, min_price=None, max_price=None):
     return relevance_filter(query, out, wanted)
 
 
+async def keyword_rows(query, min_price=None, max_price=None):
+    """BM25 关键词召回：索引来自向量库中的商品文档，不查 MySQL 商品表。"""
+    hits = bm25_search(_bm25_query(query), min_price, max_price, top_k=20)
+    cats = await category_names()
+    wanted = await named_category_segment(query)
+    out = []
+    for text, md in hits:
+        category = cats.get(to_int(md.get("categoryId")), "")
+        if not category_matches(wanted, category, md.get("goodsName")):
+            continue
+        snippet = text or ""
+        out.append({
+            "goodsId": md.get("goodsId"),
+            "goodsName": md.get("goodsName"),
+            "brand": md.get("brand"),
+            "categoryId": md.get("categoryId"),
+            "category": category,
+            "price": md.get("price"),
+            "sales": md.get("sales"),
+            "snippet": snippet[:150] + "..." if len(snippet) > 150 else snippet,
+        })
+    return _keyword_gate(query, out)
+
+
 def _tokens(text):
     t = (str(text or "")).lower()
     toks = set(re.findall(r"[a-z0-9]{2,}", t))
@@ -127,29 +176,97 @@ def _lexical_overlap(query, row):
     return bool(q & d)
 
 
+def _row_text(row):
+    return (str(row.get("goodsName") or "") + str(row.get("brand") or "")
+            + str(row.get("category") or "")).lower()
+
+
+# 用户口语品牌名 -> 商品库里实际写的品牌词；子品牌也归到母品牌下检索
+_BRAND_ALIASES = {
+    "红米": ("redmi",),
+    "小米": ("小米", "redmi"),
+    "苹果": ("apple",),
+    "荣耀": ("荣耀", "honor"),
+    "联想": ("联想", "lenovo"),
+    "华硕": ("华硕", "asus"),
+    "戴尔": ("戴尔", "dell"),
+    "惠普": ("惠普", "hp"),
+    "三星": ("三星", "samsung"),
+    "索尼": ("索尼", "sony"),
+}
+
+
+def _brand_alias(term):
+    """拆出品牌词并换成商品库里的写法，剩下的部分继续按品类词做字面匹配。"""
+    for alias, targets in _BRAND_ALIASES.items():
+        if alias in term:
+            return targets, term.replace(alias, "")
+    return (), term
+
+
+def _bm25_query(query):
+    """中文品牌别名先换成商品库里的写法再交给 BM25，否则"红米"这种词一个字都命不中。"""
+    term = concrete_term(query)
+    if not term:
+        return query
+    brands, rest = _brand_alias(term)
+    if brands:
+        return " ".join(x for x in (brands[0], rest) if x)
+    return query
+
+
+def _keyword_gate(query, rows):
+    """BM25 是"字面相关"召回，容易把只共享"手机/Pro"这类通用词的商品带进来。
+
+    关键词检索再收紧一层：用户词里的每个汉字都要在商品名/品牌/分类中出现；
+    纯英文数字型号则要求最长的那个词命中。场景型长句不做收紧，交给语义检索。
+    """
+    term = concrete_term(query)
+    if term:
+        brands, rest = _brand_alias(term)
+        out = []
+        for r in rows:
+            text = _row_text(r)
+            if rest and not all(ch in text for ch in rest):
+                continue
+            if brands and not any(b in text for b in brands):
+                continue
+            out.append(r)
+        return out
+    words = re.findall(r"[a-z0-9]{2,}", str(query or "").lower())
+    if words:
+        key = max(words, key=len)
+        return [r for r in rows if key in _row_text(r)]
+    return rows
+
+
 async def search_goods_impl(keyword, min_price=None, max_price=None):
     try:
-        resp = await goods_client.list_goods(keyword, None, 200)
         out = []
-        for r in resp.get("rows") or []:
-            price = to_float(r.get("price"))
-            if min_price is not None and price < min_price:
-                continue
-            if max_price is not None and price > max_price:
-                continue
-            out.append(await _compact(r))
-        result = {}
-        if not out and keyword and keyword.strip():
-            seg = await named_category_segment(keyword)
-            if seg:
-                out = await semantic_rows(seg, min_price, max_price)
-            else:
-                out = relevance_filter(keyword, await semantic_rows(keyword, min_price, max_price), seg)
-            result["matchedBy"] = "semantic"
-            result["note"] = "关键词没有精确匹配，以下为同品类或语义相近商品，可直接推荐；只有与用户所需品类明显不符时才说明暂无"
-        else:
-            result["matchedBy"] = "keyword"
-        result["count"] = len(out)
+        try:
+            # 关键词检索走 BM25：索引直接用向量库里的商品文档，命中的是字面相关商品
+            if keyword and keyword.strip():
+                out = await keyword_rows(keyword, min_price, max_price)
+        except Exception:
+            out = []
+        matched = "bm25"
+        if not out:
+            # 向量库不可用，或商品刚上架还没同步进知识库：退回 MySQL 关键词匹配保证可搜到
+            resp = await goods_client.list_goods(keyword, None, 200)
+            for r in resp.get("rows") or []:
+                price = to_float(r.get("price"))
+                if min_price is not None and price < min_price:
+                    continue
+                if max_price is not None and price > max_price:
+                    continue
+                out.append(await _compact(r))
+            matched = "mysql"
+        result = {"matchedBy": matched, "count": len(out)}
+        if not out:
+            result["note"] = (
+                "无匹配商品。请如实告知用户商城暂未找到相关商品，"
+                "禁止列举、推荐或试探相近品类（例如不要问\"需要购买雨具吗\"）。"
+            )
         result["goods"] = out[:8]
         return _dumps(result)
     except Exception as e:

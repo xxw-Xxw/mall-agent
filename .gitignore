@@ -2,6 +2,7 @@
 venv/
 /redis/
 chroma-data/
+agent/data/
 backend/*.jar
 
 # ===== 前端依赖与构建产物 =====
@@ -24,5 +25,14 @@ logs/
 __pycache__/
 *.pyc
 
-# ===== 密钥配置（含 API Key，禁止提交） =====
+# ===== 密钥配置（含 API Key / 数据库口令，禁止提交） =====
 agent/.env
+agent/.env.dev
+agent/.env.prod
+/.env
+/.env.dev
+/.env.prod
+/.env.local
+web/.env
+web/.env.local
+RuoYi-Vue3/.env.local

@@ -1,6 +1,9 @@
 <script setup>
 import { ref, nextTick, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import { clearToken, getToken, userState } from '@/store/user'
+
+const agentBase = import.meta.env.VITE_AGENT_BASE || ''
 
 const router = useRouter()
 const messages = ref([])
@@ -26,41 +29,79 @@ function scrollTop() {
   })
 }
 
-function sessionId() {
-  let sid = sessionStorage.getItem('mall_agent_sid')
-  if (!sid) {
-    sid = 'web-' + Math.random().toString(36).slice(2, 10)
-    sessionStorage.setItem('mall_agent_sid', sid)
-  }
-  return sid
+const ANON_KEY = 'mall_agent_anon_id'
+
+// 匿名会话 ID：localStorage 持久化，由服务端在首次请求时下发或前端自建
+function anonId() {
+  return localStorage.getItem(ANON_KEY) || ''
 }
 
-function pushMessage(role, text, goods = null, streaming = false) {
-  messages.value.push({ role, raw: text, text, goods, streaming, time: now() })
+function setAnonId(id) {
+  if (id) localStorage.setItem(ANON_KEY, id)
+}
+
+// 已登录时带会员 token，Agent 会据此把会话绑定到 member:{memberId}
+function authHeaders() {
+  const token = getToken()
+  return token ? { Authorization: 'Bearer ' + token } : {}
+}
+
+function pushMessage(role, text, goods = null, streaming = false, time = now()) {
+  messages.value.push({ role, raw: text, text, goods, streaming, time })
   scrollTop()
   // 必须返回响应式代理而不是原始对象：直接改原始对象不会触发视图更新和 watch，
-  // 会导致流式打字机失效、且持久化到 sessionStorage 的 AI 消息内容为空
+  // 会导致流式打字机失效、且持久化到本地的 AI 消息内容为空
   return messages.value[messages.value.length - 1]
 }
 
-// 会话记录持久化：与 sessionId 同存于 sessionStorage（关标签页即失效，与后端会话上下文生命周期一致）
-const HISTORY_KEY = 'mall_agent_history'
+// 本地缓存仅作为后端历史接口不可用时的兜底，按登录态分开，避免匿名与会员内容互串
+function historyKey() {
+  return getToken() ? 'mall_agent_history_member' : 'mall_agent_history_anon'
+}
 
 function saveHistory() {
   try {
     const list = messages.value.slice(-50).map((m) => ({ role: m.role, raw: m.raw, goods: m.goods, time: m.time }))
-    sessionStorage.setItem(HISTORY_KEY, JSON.stringify(list))
+    localStorage.setItem(historyKey(), JSON.stringify(list))
   } catch { /* 存储满或被禁用时静默跳过 */ }
 }
 
 function restoreHistory() {
   try {
-    const raw = sessionStorage.getItem(HISTORY_KEY)
+    const raw = localStorage.getItem(historyKey())
     if (!raw) return false
     const list = JSON.parse(raw)
     if (!Array.isArray(list) || !list.length) return false
+    messages.value = []
     for (const m of list) {
-      const msg = pushMessage(m.role, m.raw || '', m.goods || null, false)
+      const msg = pushMessage(m.role, m.raw || '', m.goods || null, false, m.time || '')
+      renderStreaming(msg)
+    }
+    return true
+  } catch {
+    return false
+  }
+}
+
+// 优先从后端恢复：会话绑定会员/匿名身份，换设备或重启服务后仍能接上
+async function loadHistory() {
+  const params = new URLSearchParams({ limit: '50' })
+  const anon = anonId()
+  if (!getToken() && anon) params.set('anonId', anon)
+  try {
+    const resp = await fetch(agentBase + '/agent/history?' + params.toString(), { headers: authHeaders() })
+    if (resp.status === 401) {
+      clearToken()
+      return false
+    }
+    if (!resp.ok) return false
+    const data = await resp.json()
+    setAnonId(data.anonId)
+    const list = data.messages || []
+    if (!list.length) return false
+    messages.value = []
+    for (const item of list) {
+      const msg = pushMessage(item.role, item.text || '', item.goods || [], false, '')
       renderStreaming(msg)
     }
     return true
@@ -79,13 +120,14 @@ function stripLinks(text) {
 }
 
 function renderStreaming(msg) {
-  let lines = stripLinks(msg.raw).split('\n')
-  if (msg.streaming && lines.length && /RECOMMEND/i.test(lines[lines.length - 1])) {
-    lines = lines.slice(0, -1)
+  // RECOMMEND 可能独占一行，也可能被模型直接接在正文末尾，
+  // 所以只能剥掉标记及其后面的内容，不能整行过滤，否则正文会被一起删掉
+  let text = stripLinks(msg.raw).replace(/RECOMMEND\s*[:：].*$/gim, '')
+  if (msg.streaming) {
+    // 流式过程中标记可能只到了一半，避免闪出 "RECOMM" 之类的残字
+    text = text.replace(/RECOMM[A-Z]*\s*[:：]?[^\n]*$/, '')
   }
-  msg.text = lines
-    .filter((l) => !/RECOMMEND[:：]/i.test(l))
-    .join('\n')
+  msg.text = text
     .replace(/\n{3,}/g, '\n\n')
     .trim()
 }
@@ -109,6 +151,11 @@ function handleEvent(msg, block) {
     msg.raw += data.text
     renderStreaming(msg)
     scrollTop()
+  } else if (event === 'replace' && data.text) {
+    // 服务端对脱离检索结果的回答做了纠正重写，以最终正文为准
+    msg.raw = data.text
+    renderStreaming(msg)
+    scrollTop()
   } else if (event === 'goods' && Array.isArray(data)) {
     msg.goods = data
     scrollTop()
@@ -128,11 +175,17 @@ async function send(preset) {
   scrollTop()
 
   try {
-    const resp = await fetch('/agent/chat', {
+    const resp = await fetch(agentBase + '/agent/chat', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionId: sessionId(), message: text })
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ anonId: anonId(), message: text })
     })
+    const newAnon = resp.headers.get('X-Anon-Id')
+    if (newAnon) setAnonId(newAnon)
+    if (resp.status === 401) {
+      clearToken()
+      throw new Error('401')
+    }
     if (!resp.ok || !resp.body) throw new Error('HTTP ' + resp.status)
 
     const reader = resp.body.getReader()
@@ -156,7 +209,9 @@ async function send(preset) {
   } catch (e) {
     aiMsg.streaming = false
     if (!aiMsg.raw) {
-      aiMsg.text = '小橙暂时联系不上服务，请确认 AI 导购服务（mall-agent :8090）已启动～'
+      aiMsg.text = e.message === '401'
+        ? '登录已过期，已切换为游客会话，请重新登录后继续～'
+        : '小橙暂时联系不上服务，请确认 AI 导购服务（mall-agent :8090）已启动～'
     }
   } finally {
     sending.value = false
@@ -164,10 +219,22 @@ async function send(preset) {
   }
 }
 
-onMounted(() => {
+const GREETING = '您好！我是 AI 导购小橙 🤖\n\n我已接入真实 AI 能力，可以：\n· 理解口语化需求做语义选品（如"露营带什么"）\n· 查真实库存、价格、参数，回答商品咨询\n· 推荐可点击跳转的真实商品\n\n试试下面的快捷提问，或直接描述您的需求～'
+
+async function bootstrap() {
+  if (await loadHistory()) return
   if (restoreHistory()) return
-  pushMessage('ai', '您好！我是 AI 导购小橙 🤖\n\n我已接入真实 AI 能力，可以：\n· 理解口语化需求做语义选品（如"露营带什么"）\n· 查真实库存、价格、参数，回答商品咨询\n· 推荐可点击跳转的真实商品\n\n试试下面的快捷提问，或直接描述您的需求～')
+  pushMessage('ai', GREETING)
+}
+
+// 登录/登出后切换会话身份，重新拉取对应的历史，避免匿名与会员内容混在一起
+watch(() => userState.token, async () => {
+  messages.value = []
+  if (await loadHistory()) return
+  pushMessage('ai', GREETING)
 })
+
+onMounted(bootstrap)
 </script>
 
 <template>

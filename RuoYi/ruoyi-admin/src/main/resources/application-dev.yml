@@ -1,0 +1,50 @@
+# ============================================================
+# 开发环境配置（默认激活）：application-dev.yml
+# 启用方式：SPRING_PROFILES_ACTIVE=dev（不设置时默认 dev）
+# 数据库/Redis 连接值来自环境变量或根目录 .env.dev
+# ============================================================
+spring:
+  # 热部署（仅开发环境）
+  devtools:
+    restart:
+      enabled: true
+  datasource:
+    druid:
+      # 主库数据源
+      master:
+        url: "${DB_URL:jdbc:mysql://localhost:3306/ry-vue?useUnicode=true&characterEncoding=utf8&zeroDateTimeBehavior=convertToNull&useSSL=true&serverTimezone=GMT%2B8}"
+        username: ${DB_USERNAME:root}
+        password: ${DB_PASSWORD:}
+      # Druid 监控台（仅开发环境开放）
+      statViewServlet:
+        enabled: true
+        # 设置白名单，不填则允许所有访问
+        allow:
+        url-pattern: /druid/*
+        login-username: ${DRUID_USERNAME:ruoyi}
+        login-password: ${DRUID_PASSWORD:}
+  data:
+    # redis 配置
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      database: ${REDIS_DATABASE:0}
+      password: ${REDIS_PASSWORD:}
+      timeout: 10s
+      lettuce:
+        pool:
+          min-idle: 0
+          max-idle: 8
+          max-active: 8
+          max-wait: -1ms
+
+logging:
+  level:
+    com.ruoyi: ${LOG_LEVEL:debug}
+
+# 开发环境开启接口文档
+springdoc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true

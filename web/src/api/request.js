@@ -3,7 +3,7 @@ import { getToken, clearToken } from '@/store/user'
 import router from '@/router'
 
 const request = axios.create({
-  baseURL: '/api',
+  baseURL: import.meta.env.VITE_API_BASE || '/api',
   timeout: 15000
 })
 

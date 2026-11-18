@@ -1,0 +1,54 @@
+# ============================================================
+# 生产环境配置：敏感项全部由环境变量注入，缺失会直接启动失败
+# 启动方式：SPRING_PROFILES_ACTIVE=prod（druid 连接池配置由 profile group 自动加载）
+# 必填环境变量：DB_URL / DB_USERNAME / DB_PASSWORD / REDIS_HOST / REDIS_PORT /
+#             REDIS_PASSWORD / TOKEN_SECRET / RUOYI_PROFILE / AGENT_BASE_URL
+# ============================================================
+spring:
+  devtools:
+    restart:
+      enabled: false
+  datasource:
+    druid:
+      master:
+        url: ${DB_URL}
+        username: ${DB_USERNAME}
+        password: ${DB_PASSWORD}
+      # 生产环境关闭 Druid 监控台，避免暴露数据源信息
+      statViewServlet:
+        enabled: false
+  data:
+    redis:
+      host: ${REDIS_HOST}
+      port: ${REDIS_PORT}
+      password: ${REDIS_PASSWORD}
+      timeout: 10s
+      lettuce:
+        pool:
+          min-idle: 0
+          max-idle: 8
+          max-active: 8
+          max-wait: -1ms
+
+ruoyi:
+  profile: ${RUOYI_PROFILE}
+
+token:
+  secret: ${TOKEN_SECRET}
+
+logging:
+  level:
+    com.ruoyi: info
+
+# 生产环境关闭在线接口文档
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false
+
+mall:
+  agent:
+    base-url: ${AGENT_BASE_URL}
+    jwt-secret: ${AGENT_JWT_SECRET}
+    jwt-expire-minutes: ${AGENT_JWT_EXPIRE_MINUTES:10}

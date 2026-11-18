@@ -10,8 +10,11 @@ import java.util.concurrent.Executors;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
+
+import com.ruoyi.system.service.AgentJwtService;
 
 /**
  * 商城商品变更后，异步通知 AI 导购服务更新向量库。
@@ -35,6 +38,9 @@ public class AgentIndexClient
 
     @Value("${mall.agent.base-url:http://127.0.0.1:8090}")
     private String baseUrl;
+
+    @Autowired
+    private AgentJwtService agentJwtService;
 
     /** 商品新增/编辑后写入或覆盖向量 */
     public void upsert(Long goodsId)
@@ -62,9 +68,11 @@ public class AgentIndexClient
     {
         try
         {
+            String jwt = agentJwtService.issueToken("mall-backend", "system");
             HttpRequest request = HttpRequest.newBuilder(URI.create(url))
                     .timeout(Duration.ofSeconds(20))
                     .header("Content-Type", "application/json")
+                    .header("Authorization", "Bearer " + jwt)
                     .method(method, HttpRequest.BodyPublishers.noBody())
                     .build();
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
